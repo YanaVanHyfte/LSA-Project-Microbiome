@@ -1,0 +1,176 @@
+In this machine learning model, we will try to predict the diagnosis of our patients (Crohn's disease, colitis uclerose or no inflammatory bowel disease). For this model, we will use the genera counts (counts of bacteria in the gut) and some collums of the metadata that might have an influence on the diagnosis.
+
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import classification_report, roc_auc_score
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+We start by loading in the metadata and the genera counts.
+
+genera = pd.read_csv('genera.counts.tsv', sep='\t')
+metadata = pd.read_csv('metadata.tsv', sep='\t')
+
+Next we merge these two datasets to be able to link the bacteria counts to the correct disease. By using 'left' as method, we make sure that all rows from the metadata will be kept.
+
+merged = pd.merge(metadata, genera, on='Sample', how='left')
+
+We want to make sure that only the rows with study groups remain.
+
+merged = merged[merged['Study.Group'].isin(['CD', 'UC', 'nonIBD'])]
+
+merged
+
+Now, we want to assign a label to each sample, corresponding to the study group they belong to.
+
+labels = merged['Study.Group']
+labels
+
+Next, we drop all the columns from the meta data that aren't useful for the machine learning model. These are the variables that we don't want the model to use as a reason to classify a patient in the study groups, such as sample names, site name and DOI. It is also important to drop the column with the study group so that it cannot influence the outcome.
+
+print(merged.columns[:25])
+
+columns_to_drop = [
+    'Sample', 'Study.Group', 'race', 'Dataset', 'Subject', 'DOI', 'Publication.Name',
+    'Age.Units', 'site_sub_coll', 'ProjectSpecificID', 'week_num', 'date_of_receipt',
+    'interval_days', 'visit_num', 'site_name', 'smoking_status'
+]
+features = merged.drop(columns=[col for col in columns_to_drop if col in merged.columns])
+
+features
+
+We print the first 15 columns to make sure that no unwanted metadata columns remain present.
+
+print(features.columns[:15])
+
+Seeing as machine learning can only work with numeric values, we change the columns with strings to numbers.
+
+non_numeric_cols = features.select_dtypes(include=['object', 'string']).columns
+print(non_numeric_cols)
+
+features['Gender'] = features['Gender'].map({'Male': 0, 'Female': 1})
+
+features
+
+features['Antibiotics'] = features['Antibiotics'].map({'No': 0, 'Yes': 1})
+
+features
+
+from sklearn.preprocessing import LabelEncoder
+
+encoder = LabelEncoder()
+features['smoking status'] = encoder.fit_transform(features['smoking status'])
+
+print(encoder.classes_)
+
+With the next code, we assign 2 to current smokers, 1 to former smokers and 0 to people who have never smoked. (When assigned automatically, this was done differently.)
+
+custom_mapping = {0: 2, 1: 1, 2: 0} 
+
+features['smoking status'] = features['smoking status'].map(custom_mapping)
+
+features
+
+Machine learning models cannot handle missing values. That is why we decided to replace all the missing values with the mean of the columns. By using the mean to replace NA, we try to minimize bias.
+
+features = features.fillna(features.mean())
+
+features
+
+We standardize the data because all the features have different scales. We want to prevent that the model is dominated by the features with the biggest ranges.
+
+scaler_std = StandardScaler()
+features_scaled = pd.DataFrame(scaler_std.fit_transform(features), columns=features.columns)
+
+It is important to be able to test our model. That is why we split our data set into a train set and test set before training the model. We use the 80/20 model for this, meaning that 80% (305 samples) of the data will be used for training and 20% (77 samples) for testing. The allocation of the smaples to these sets happens randomly.
+
+By using stratify=labels, the train_test_split function ensures that the proportions of each class (CD, UC, nonIBD) in the training set are the same as in the entire dataset. This ensures that both the training and testing sets are representative of the overall class distribution, helping the model generalize better and avoid biases.
+This approach helps avoid the situation where one of the classes might be underrepresented in either the training or testing set, ensuring that the model has enough data from each class to learn effectively.
+
+X_train, X_test, y_train, y_test = train_test_split(
+    features_scaled, labels, test_size=0.2, stratify=labels, random_state=42
+)
+
+A Logistic Regression model is trained on the scaled features to estimate feature importance. The Logistic Regression model is used to evaluate how each feature (or variable) in the dataset contributes to predicting the target variable (CD, UC, or nonIBD). The coefficients from the logistic regression model are used to rank the features.
+
+log_reg = LogisticRegression(max_iter=1000, random_state=42)
+log_reg.fit(X_train, y_train)
+
+feature_importance = pd.DataFrame({
+    'feature': features.columns,
+    'importance': abs(log_reg.coef_).mean(axis=0)
+}).sort_values(by='importance', ascending=False)
+feature_importance.head(50)
+
+We will select the 50 most important features to further train our model.
+
+top_features = feature_importance.head(50)['feature']
+X_train_top = X_train[top_features]
+X_test_top = X_test[top_features]
+
+We will now use Random Forest Classifier to train our model. It is an ensemble learning algorithm that creates multiple decision trees during training and outputs the class that is the mode (most frequent) of the classes predicted by individual trees.
+Random forests are widely used because they tend to produce more accurate predictions compared to individual decision trees due to their ability to reduce overfitting through averaging (bagging).
+
+Setting class_weight='balanced' automatically adjusts the weights of the classes inversely proportional to their frequency in the dataset. This means that the model will give more importance to the less frequent classes during training, helping it to learn better from underrepresented classes and improve its performance on them.
+
+The code below generates 200 tress with a maximum of 10 nodes.
+
+rf = RandomForestClassifier(random_state=42, n_estimators=200, max_depth=10, class_weight='balanced')
+rf.fit(X_train_top, y_train)
+
+After training our model, it is important to evaluate the model. We will do this by making predictions for the test set and comparing these to the correct labels.
+
+predictions = rf.predict(X_test_top)
+pred_proba = rf.predict_proba(X_test_top)
+print("Classification Report:")
+print(classification_report(y_test, predictions))
+
+The precision of the model is the proportion of predicted positives that are actually positive. These numbers are quite good for our model.
+
+Recall is the proportion of actual positives that were correctly identified by the model. This is good for CD and nonIBD, but the model will miss some patients with UC.
+
+The F1-score is the harmonic mean of precision and recall. It provides a balance between precision and recall. High numbers indicate a good balance between the precision and mean. These are okay for all the groups.
+
+Support is the number of actual instances of these groups in the dataset. This means that there were 36 CD patients, 20 UC patients and 21 healthy individuals in our test set.
+
+Accuracy is the overall proportion of correct predictions. In this case, the model correctly predicted 88% of all instances across all classes. While accuracy gives a general sense of how well the model performed, it can be misleading if there is an imbalance in class distribution.
+
+The macro average calculates the unweighted mean of precision, recall, and F1-score across all classes. Each class is treated equally regardless of the number of instances. Here, the model performs fairly well on average across all classes, with a slightly higher precision compared to recall.
+
+The weighted average considers the support (the number of instances) for each class. This metric gives more importance to classes with more instances. In this case, the weighted averages are equal, indicating that the model's performance is fairly balanced when accounting for the class distribution in the dataset.
+
+Next, we will calculate the ROC-AUC score. This score is a performance measure for classification models, and it's particularly useful for evaluating the quality of a model's predictions, especially when dealing with imbalanced classes.
+
+OvR (One-vs-Rest) is a strategy used for multi-class classification problems. In this approach, a binary classifier is trained for each class, where the model treats that class as the positive class and all other classes as the negative class. Then, the model makes predictions for each class and the one with the highest predicted probability is selected as the final prediction.
+
+An AUC of 1.0 means perfect classification.
+An AUC of 0.5 means the model is no better than random guessing.
+An AUC below 0.5 suggests the model is worse than random guessing.
+
+roc_auc = roc_auc_score(pd.get_dummies(y_test), pred_proba, multi_class='ovr')
+print(f"ROC-AUC Score (one-vs-rest): {roc_auc:.2f}")
+
+Based on the ROC-AUC score of 0.96, we can conclude that we come very close to perfect classification.
+
+Next, we also want to know the accuracy of our model.
+
+print("Accuracy: {}".format(rf.score(X_test_top, y_test)))
+
+Our model has an accuracy of 88%. This means that our model is quite good, but there is room for improvement.
+
+Lastly, we make a t-SNE visualistation of our model.
+
+tsne = TSNE(n_components=2, perplexity=30, random_state=42)
+X_train_tsne = tsne.fit_transform(X_train_top)
+tsne_result = pd.DataFrame(X_train_tsne, columns=["t-SNE_1", "t-SNE_2"])
+tsne_result["label"] = y_train.reset_index(drop=True)
+
+plt.figure(figsize=(8, 6))
+sns.scatterplot(data=tsne_result, x="t-SNE_1", y="t-SNE_2", hue="label", palette="Set2")
+plt.title("t-SNE Visualization of Study Groups")
+plt.tight_layout()
+plt.show()
