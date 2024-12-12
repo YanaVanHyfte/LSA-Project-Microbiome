@@ -1,0 +1,706 @@
+---
+title: "Microbiome"
+author: "Robbe Comeyne, Bianca Ivanov, Paulien van Dyck and Yana Van Hyfte"
+date: "2024-12-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+**Data exploration**
+
+We start by loading the metadata and the genera counts.
+
+```{r}
+library(tidyverse)
+genera <- read_tsv("genera.counts.tsv")
+meta <- read_tsv("metadata.tsv")
+```
+
+We will start by looking at the different columns in the meta data.
+
+```{r}
+meta %>% ls()
+```
+
+We want to change the column names with spaces to column names with underscores.
+
+```{r}
+colnames(meta)[colnames(meta) == "Age at diagnosis"] <- "Age_at_diagnosis"
+colnames(meta)[colnames(meta) == "smoking status"] <- "smoking_status"
+```
+
+```{r}
+dim(meta)
+```
+
+```{r}
+meta %>% ls()
+```
+
+We start by having a look at the kind of variables that can be found in the meta data.
+
+```{r}
+meta %>% summary(n())
+```
+
+__study group__
+
+```{r}
+meta %>%
+  group_by(Study.Group) %>%
+  summarise(n())
+```
+
+There are more patients with Crohn's disease then there are patients with colitis ulcerosa or healthy individuals in this study.
+All groups are big enough to be used in our statistical tests.
+
+__Gender__
+
+```{r}
+meta %>%
+  group_by(Gender) %>%
+  summarise(n())
+```
+
+These two groups are equally distributed.
+
+__consent age__
+
+```{r}
+ggplot(meta, aes(x = consent_age)) +
+  geom_histogram(fill = "skyblue", color = "black") +
+  theme_minimal() +
+  labs(title = "Consent age of participants",
+       x = "Consent age",
+       y = "Counts")
+```
+
+```{r}
+meta %>%
+  select(consent_age) %>%
+  summary()
+```
+
+We can clearly see that there are more young people in this study, but we have participants from all ages, ranging from 6 to 76 years old. Half our participants are younger than 21 years old. 
+
+__Age at diagnosis__
+
+```{r}
+ggplot(meta, aes(x = Age_at_diagnosis)) +
+  geom_histogram(fill = "skyblue", color = "black") +
+  theme_minimal() +
+  labs(title = "Age at diagnosis of participants",
+       x = "Consent age",
+       y = "Counts")
+```
+
+We see that most people get diagnosed at a young age.
+
+```{r}
+meta %>%
+  select(Age_at_diagnosis) %>%
+  summary()
+```
+
+We observe that there are many missing values.
+
+```{r}
+meta %>%
+  select(Study.Group, Age_at_diagnosis) %>%
+  group_by(Study.Group) %>%
+  summarise(
+    total_count = n(),
+    na_count = sum(is.na(Age_at_diagnosis))
+  )
+```
+
+Almost all missing values can be found in the nonIBD group. This means that of almost all people who got a diagnosis, we have the age at diagnosis. There's only 4 missing values in the CD group. This means we can use this variable for statistical tests that only concern people with a diagnosis and not the healthy individuals.
+
+__Antibiotics__
+
+```{r}
+meta %>% 
+  group_by(Antibiotics) %>%
+  summarise(n())
+```
+
+There are much more participants that did not receive antibiotics, then there are participants that did recieve antibiotics.
+
+```{r}
+meta %>% 
+  group_by(Antibiotics, Study.Group) %>%
+  summarise(n())
+```
+
+Based on these data, we decided not to use antibiotics as a variable for our hypotheses.
+
+__Race__
+
+```{r}
+meta %>% 
+  group_by(race) %>%
+  summarise(n())
+```
+
+Seeing as almost all participants are White, this is not a variable that is useful for our hypotheses.
+
+__Fecal calprotectin__
+
+Fecal calprotectin is a protein found in white blood cells, particularly neutrophils, and is used as a biomarker to assess inflammation in the intestines. It is typically measured in stool (fecal) samples to help diagnose or monitor inflammatory bowel diseases (IBD), such as Crohn's disease and ulcerative colitis.
+
+```{r}
+ggplot(meta, aes(x = fecalcal)) +
+  geom_histogram(fill = "skyblue", color = "black") +
+  theme_minimal() +
+  labs(title = "Fecal calprotectin of participants",
+       x = "Fecal calprotectin",
+       y = "Counts")
+```
+
+```{r}
+meta %>%
+  select(fecalcal) %>%
+  summary()
+```
+
+We can see that there are again many missing values. 
+
+```{r}
+meta %>%
+  select(Study.Group, fecalcal) %>%
+  group_by(Study.Group) %>%
+  summarise(
+    total_count = n(),
+    na_count = sum(is.na(fecalcal))
+  )
+```
+
+The missing values are spread between the three study groups. Due to the missing values, we decided not to focus on this variable.
+
+__BMI, Height and Weight__
+
+```{r}
+meta %>%
+  select(BMI_at_baseline, Height_at_baseline, Weight_at_baseline) %>%
+  summary()
+```
+
+We can see that there are again quite some missing values.
+
+__Smoking status__
+
+```{r}
+meta %>%
+  group_by(smoking_status) %>%
+  summarise(n())
+```
+
+More than half of the data points have no value for this variable, so we decided not to use it for our hypotheses.
+
+
+
+**Hypothesis 1**
+
+With the first hypothesis, we want to test whether there is a difference in the diversity of the bacteria in the microbiome of healty individuals, patients with CD and patients with UC. To do this, we start be formulating a null hypothesis and an alternative hypothesis.
+
+H0: There is no difference in the diversity of the microbiome between healthy individuals, CD patients and UC patients. 
+
+Ha: There is a difference in the diversity of the microbiome between healthy individuals, CD patients and UC patients. 
+
+We will work at the 0,05 significance level.
+
+
+To be able to link the counts of the bacteria in the microbiome of the patients to the study group of the patients (nonIBD, CD or UC) we merged both matrices. By putting the meta data first, we make sure that all samples from the meta data will be kept in the merged data, even if there would be no corresponding counts.
+
+```{r}
+merged <- merge(meta, genera, by = "Sample") 
+merged
+```
+
+After merging the matrices, we calculate the richness for each individual. This means that we look at how many different bacteria are present in the samples of the microbiome. We will add this column to the matrix with the function 'mutate'.
+
+```{r}
+library(dplyr)
+
+genera_richness <- merged %>%
+  rowwise() %>% 
+  mutate(Richness = sum(c_across(starts_with("d__")) > 0)) %>% 
+  ungroup()
+genera_richness
+```
+
+Now we want to see whether there can be observed a difference in the diversity between the study groups. To do this, we make boxplots that visualize the richness for each group.
+
+```{r}
+library(ggplot2)
+ggplot(genera_richness, aes(x = Study.Group, y = Richness, fill = Study.Group)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, alpha = 0.7) +
+    labs(title = "Observed Richness Across Study Groups",
+    x = "Study Group", y = "Observed Richness") + 
+  theme_minimal() +
+    scale_fill_brewer(palette = "Set3")
+```
+
+In this boxplot, we can see a slightly higher richness in the individuals that don't have IBD compared to the patients with CD and UC.
+
+To determine which statistical tests we should use to test if this difference is significant, we first look whether the data is normally distributed.
+
+We start by making a histogram for all the data.
+
+```{r}
+ggplot(genera_richness, aes(x = Richness)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 30, fill = 'skyblue', color = 'black', alpha = 0.6) +  
+  geom_density(color = 'black', linewidth = 1) +  
+  labs(title = 'Distribution of observed Richness', x = "Richness", y = "Count") +
+  theme_minimal()
+```
+
+Based on this histrogram, it seems that the data is normally distributed, but there might be some skewness in the tails. To check this, we will also make a qqplot.
+
+```{r}
+library(ggpubr)
+
+ggqqplot(genera_richness,x = "Richness") 
+  ggtitle("QQ Plot of Richness Across Study Group") +
+  theme_minimal()
+```
+
+In this plot, we can see that there are some deviations from normality in the tails.
+
+However, it is more important to know if the data is normally distributed in the different study groups. We will make histograms and qqplots for each group.
+
+```{r}
+ggplot(genera_richness, aes(x = Richness, fill = Study.Group)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 30, alpha = 0.6, color = 'black') +
+  geom_density(color = 'black', linewidth = 1, fill = NA) +
+  labs(title = "Distribution of Observed Richness by Study Group", 
+       x = "Richness", 
+       y = "Density") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set3") + 
+  scale_color_brewer(palette = "Set3") +
+  facet_wrap(~ Study.Group, ncol = 1) 
+```
+
+These histogram seem to indicate that the data are not completely normally distributed, there is some skewness in the groups.
+
+```{r}
+library(ggpubr)
+
+ggqqplot(genera_richness,
+         x = "Richness", 
+         facet.by = "Study.Group",
+         color = "Study.Group",
+         palette = "Sett3") +
+  ggtitle("QQ Plot of Richness Across Study Group")+
+  theme_minimal()
+```
+
+The qqplots also show that there are some deviations from the theoretical normal line, particularly at the tails. 
+
+We can thus conclude that the data are not normally distributed.
+
+
+**Kruskal-Wallis**
+
+Purpose: To test whether the distribution of a continuous or ordinal variable differs across three or more groups.
+
+Kruskal-Wallis test is used when you have one ordinal or continuous variable and you want to compare it across three or more independent groups. It is often used when data do not meet the assumptions of the ANOVA test, such as when the data is not normally distributed.
+
+By using the Kruskal-Wallis test, we also ensure that outliers have no effect on the test results.
+
+```{r}
+kruskal.test(Richness ~ Study.Group, data = genera_richness)
+```
+
+Based on the p-value of 0,003 that we received with the Kruskal-Wallis test, we can reject the null hypothesis on the 0,05 significance level. This means that there is a significant difference in the diversity (richness) of the microbiome of healthy individuals, CD patients and UC patients. 
+Based on the results of the Kruskal-Wallis test, we cannot determine between which groups the significant differences can be observed. To determine this, we will do a post-hoc test, namely the Dunn test. This is a test designed to perform following for example the Kruskal-Wallis test. By using the Benjamini-Hochberg method for the adjusted p-values we reduce the possibility for false positives. This method is less strict than the Bonferroni method.
+
+```{r}
+library(dunn.test)
+```
+
+```{r}
+dunn_result <- dunn.test(genera_richness$Richness, genera_richness$Study.Group, 
+                         kw = TRUE, label = TRUE, wrap = TRUE, 
+                         table = TRUE, list = TRUE, method = "bh")
+
+print(dunn_result)
+```
+
+In these results, we can see that there is a significant difference in the diversity of the microbiome of patients with IBD and patients without IBD. In this case we work at the significance level of alpha/2 (0,025) in order not to increase the chance of falsely rejecting the null hypothesis. Alpha is divided by two when doing a two-tailed test, for example when comparing the ranks of two groups. The most significant difference can be seen between healthy individuals and patients with CD (p-value = 0.0011). There is also a significant difference in the diversity of the microbiome when comparing healthy individuals with patients with UC (p-value = 0.0228). No significant difference can be observed between patients with CD and UC (p-value = 0.1785).
+
+
+__Conclusion hypothesis 1__
+
+In the first hypothesis, we tried to find out whether there was a difference in the diversity of bacteria in the microbiome of healthy individuals, patients with CD and patients with UC. Based on the statistical tests we performed, we were able to conclude that there is a significant difference between healthy individuals and patients with IBD. This difference was most significant in patients with CD. Between patients with CD and patients with UC, no significant difference in diversity of the microbiome was observed.
+
+
+
+
+**Hypothesis 2**  
+
+In this hypothesis, we want to focus solely on Crohn's disease patients. Within this group, we want to look at the spread of one bacterial class. In order to identify this bacterial class, we first do some data exploration.
+
+To be able to keep the focus on patients with Crohn's disease, we filter these patients out of the matrices that have been merged together.
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+genera_cd <- merged %>%
+  filter(Study.Group == "CD")
+```
+
+The goal is to reorganize the data to calculate and summarize the total abundance of each bacterial classification (e.g., bacterial classes) for each sample, making it easier to analyze or visualize. We start by extracting the class of all the tested bacteria.
+
+```{r}
+long_data <- genera_cd %>%
+  pivot_longer(cols = contains("c__"),  
+               names_to = "Classification", 
+               values_to = "Abundance") %>%
+  mutate(Classification = str_extract(Classification, "(?<=c__)[^;]+"))
+
+long_data <- long_data %>%
+  mutate(Sample = rep(genera_cd$Sample, each = nrow(long_data) / length(genera_cd$Sample)))
+
+grouped_data <- long_data %>%
+  group_by(Sample, Classification) %>%
+  summarise(Total_Abundance = sum(Abundance, na.rm = TRUE)) %>%
+  arrange(Sample, desc(Total_Abundance))
+
+print(grouped_data)
+```
+
+Next we want to transform the summarized bacterial abundance data (grouped_data) from a long format, where each row represents a bacterial classification and its total abundance for a specific sample, into a wide format. In the resulting table, each sample is represented as a row, and each bacterial classification becomes a separate column. The values in the table represent the total abundance of each classification in the corresponding sample.
+
+If a bacterial classification is missing for a sample (i.e., it has no recorded abundance), the code replaces missing values by 0.
+
+```{r}
+data_wide <- grouped_data %>%
+  pivot_wider(
+    names_from = Classification,
+    values_from = Total_Abundance,
+    values_fill = 0 
+  )
+
+print(head(data_wide))
+```
+
+The next code should perform a series of steps to identify, visualize, and analyze the top 10 most abundant bacterial classes based on their total abundance across the samples. The ggplot section creates a boxplot to display the distribution of abundances for each of the top 10 bacterial classes and the generated heatmap explores patterns and relationships between the top 10 bacterial classes and samples, including potential clustering of similar profiles.
+
+```{r}
+top_10_classes <- grouped_data %>%
+  group_by(Classification) %>%
+  summarise(Overall_Abundance = sum(Total_Abundance)) %>%
+  arrange(desc(Overall_Abundance)) %>%
+  slice_head(n = 10)
+
+plot_data <- grouped_data %>%
+  filter(Classification %in% top_10_classes$Classification)
+
+ggplot(plot_data, aes(x = reorder(Classification, Total_Abundance, FUN = median), 
+                      y = Total_Abundance, 
+                      fill = Classification)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.4, size = 1) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") +
+  labs(title = "Distribution of Top 10 Most Abundant Bacterial Classes",
+       x = "Bacterial Class",
+       y = "Abundance") +
+  scale_y_log10()
+```
+
+```{r}
+wide_top_10 <- grouped_data %>%
+  filter(Classification %in% top_10_classes$Classification) %>%
+  pivot_wider(names_from = Classification,
+              values_from = Total_Abundance,
+              values_fill = 0)
+
+matrix_data <- as.matrix(wide_top_10[,-1]) 
+rownames(matrix_data) <- wide_top_10$Sample
+
+library(ComplexHeatmap)
+
+Heatmap(log10(matrix_data + 1), 
+        name = "Log10 Abundance",
+        column_title = "Top 10 Bacterial Classes",
+        row_title = "Samples",
+        cluster_rows = TRUE,
+        cluster_columns = TRUE)
+```
+
+Next code should subset the wide-format data (data_wide) to include only the samples (Sample column) and the top 10 most abundant bacterial classes.
+
+```{r}
+data_top_10 <- data_wide %>%
+  select(Sample, "Bacteroidia", "Clostridia", "Gammaproteobacteria", 
+         "Negativicutes", "Bacilli", "Verrucomicrobiae", 
+         "Actinomycetia", "Coriobacteriia", "Alphaproteobacteria", 
+         "Vampirovibrionia")
+```
+
+The wide-format data set (data_top_10) gets transformed into a long-format data set (data_long), which is more suitable for certain types of data analysis and visualization, particularly in R.
+
+```{r}
+library(tidyr)
+library(ggplot2)
+
+data_long <- data_top_10 %>%
+  pivot_longer(
+    cols = -Sample,               
+    names_to = "Bacterie",        
+    values_to = "Abundance" )      
+```
+
+we want to look whether the data is normally distributed. We start by making histograms for all the data.
+
+```{r}
+ggplot(data_long, aes(x = Abundance)) +
+  geom_histogram(fill = "skyblue", color = "black") +
+  facet_wrap(~ Bacterie, scales = "free", ncol = 2) +  
+  theme_minimal() +
+  labs(title = "Abundance Distribution of 10 most abundant Bacteria",
+       x = "Abundance",
+       y = "Frequency")
+```
+
+To check for skewness, qqplots are made for further visualization.
+
+```{r}
+ggplot(data_long, aes(sample = Abundance)) +
+  geom_qq() +
+  geom_qq_line(color = "red") +
+  facet_wrap(~ Bacterie, scales = "free", ncol = 2) +  
+  theme_minimal() +
+  labs(title = "Q-Q Plots for 10 most abundant Bacteria",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles")
+```
+
+Out of the histograms and qqplots, we see two bacteria that are most stable and have the largest differences in abundance. These two bacteria will get selected for further inspection.
+
+```{r}
+data_top_2 <- data_top_10 %>%
+  select(Sample, "Bacteroidia", "Clostridia")
+```
+
+Transform the wide-format data set into a long-format data set, focusing on the top 2 bacterial classes (Bacteroidia and Clostridia).
+
+```{r}
+data_long_top2 <- data_top_2 %>%
+  pivot_longer(
+    cols = -Sample, 
+    names_to = "Bacterie",
+    values_to = "Abundance" )
+```
+
+Histograms can show the distribution of abundance values for each of the two bacterial classes (Bacteroidia and Clostridia) individually. This gives a visualization on the normality of the two classes.
+
+```{r}
+ggplot(data_long_top2, aes(x = Abundance)) +
+  geom_histogram(fill = "skyblue", color = "black") +
+  facet_wrap(~ Bacterie, scales = "free", ncol = 2) +  
+  theme_minimal() +
+  labs(title = "Abundance Distribution of Bacteroidia and Clostridia",
+       x = "Abundance",
+       y = "Frequency")
+```
+
+```{r}
+ggplot(data_long_top2, aes(sample = Abundance)) +
+  geom_qq() +
+  geom_qq_line(color = "red") +
+  facet_wrap(~ Bacterie, scales = "free", ncol = 2) +  
+  theme_minimal() +
+  labs(title = "Q-Q Plots for Bacteroidia and Clostridia",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles")
+```
+
+Seeing as there is a bigger distribution in the abundances of Bacteroidia, we decide to focus on this one. We want to know whether gender and age have an influence on the presence of this bacterial class in Crohn's disease patients. We formulate our hypothesis as follows:
+
+H0: There is no influence of gender and age on the presence of Bacteroidia in Crohn's disease. 
+
+Ha: There is an influence of gender and age on the presence of Bacteroidia in Crohn's disease.
+
+```{r}
+Bacteroidia <- data_long_top2 %>%
+  filter(Bacterie == "Bacteroidia") %>%
+  summarise(Abundance) %>%
+  arrange(Abundance)
+Bacteroidia
+```
+
+```{r}
+ggplot(Bacteroidia, aes(x = Abundance)) +
+  geom_histogram(aes(y = ..density..), fill = "skyblue", color = "black", bins = 30) +
+  geom_density(color = "red", size = 1) +                                            
+  theme_minimal() +
+  labs(title = "Abundance Distribution of Bacteroidia",
+       x = "Abundance",
+       y = "Density")  
+```
+
+```{r}
+ggplot(Bacteroidia, aes(sample = Abundance)) +
+  geom_qq() +
+  geom_qq_line(color = "red") +
+  theme_minimal() +
+  labs(title = "Q-Q Plot for Bacteroidia",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles")
+```
+
+Based on the histogram and qqplot of the Bacteroidia, we conclude that the data are not normally distributed. To check our assumption, we do a Shapiro-Wilk normality test. When the p-value is smaller then 0,05 we can assume that the data is not normally distributed.
+
+```{r}
+shapiro_bacteroidia <- shapiro.test(Bacteroidia$Abundance)
+shapiro_bacteroidia
+```
+
+The p-value is a lot smaller then 0,05 so we can assume that are data is not normally distributed.
+
+We will now try to normalize our data.
+
+
+__Z-score Normalisation__
+
+```{r}
+bacteroidia_zscore_normalized <- Bacteroidia %>%
+  mutate(Abundance_norm_zscore = (Abundance - mean(Abundance)) / sd(Abundance))
+```
+
+```{r}
+ggplot(bacteroidia_zscore_normalized, aes(x = Abundance_norm_zscore)) +
+  geom_histogram(aes(y = ..density..), fill = "skyblue", color = "black", bins = 30) +  
+  geom_density(color = "red", size = 1) +                                             
+  theme_minimal() +
+  labs(title = "Abundance Distribution of Bacteroidia after z-score normalisation",
+       x = "Abundance",
+       y = "Density")  
+```
+
+There doesn't seem to be much difference with the data that was not normalized. Z-score normalization is not the solution for our problem. 
+
+```{r}
+shapiro_bacteroidia_zscore <- shapiro.test(bacteroidia_zscore_normalized$Abundance_norm_zscore)
+shapiro_bacteroidia_zscore
+```
+
+The Shapiro_Wilk normality test confirms this.
+
+
+__Log transformation__
+
+```{r}
+bacteroidia_log_normalized <- Bacteroidia %>%
+  mutate(Abundance_norm_log = log10(Abundance + 1)) 
+```
+
+```{r}
+ggplot(bacteroidia_log_normalized, aes(x = Abundance_norm_log)) +
+  geom_histogram(aes(y = ..density..), fill = "skyblue", color = "black", bins = 30) +  
+  geom_density(color = "red", size = 1) +                                             
+  theme_minimal() +
+  labs(title = "Abundance Distribution of Bacteroidia after log transformation",
+       x = "Abundance",
+       y = "Density")  
+```
+
+```{r}
+shapiro_bacteroidia_log <- shapiro.test(bacteroidia_log_normalized$Abundance_norm_log)
+shapiro_bacteroidia_log
+```
+
+When using log transformation, we create a left-skewed data set. Because our data is even less normal after the log transformation than before, we will not be working further with this. 
+
+
+__Min-Max normalization__
+
+```{r}
+bacteroidia_minmax_normalized <- Bacteroidia %>%
+  mutate(Abundance_min_max = (Abundance - min(Abundance)) / (max(Abundance) - min(Abundance)))
+```
+
+```{r}
+ggplot(bacteroidia_minmax_normalized, aes(x = Abundance_min_max)) +
+  geom_histogram(aes(y = ..density..), fill = "skyblue", color = "black", bins = 30) +  
+  geom_density(color = "red", size = 1) +       
+  theme_minimal() +
+  labs(title = "Abundance Distribution of Bacteroidia after Min-Max normalization",
+       x = "Abundance",
+       y = "Density")  
+```
+
+```{r}
+shapiro_bacteroidia_minmax <- shapiro.test(bacteroidia_minmax_normalized$Abundance_min_max)
+shapiro_bacteroidia_minmax
+```
+
+Similar to the z-score normalization, we don't observe much difference between the min-max normalized data and the data before normalization.
+
+Based on these three tests, we decide to work with the non-normalized data.
+
+We start by merging the Bacteroidia data with the meta data.
+
+```{r}
+bacteroidia_merged <- merge(Bacteroidia, meta, by='Sample')
+```
+
+To make it easier to draw conclusions, we put the age at diagnosis in categories.
+
+```{r}
+bacteroidia_age_categories <- bacteroidia_merged %>%
+  mutate(age_cat = case_when(
+    Age_at_diagnosis >= 0 & Age_at_diagnosis < 5 ~ "[0,5[",
+    Age_at_diagnosis >= 5 & Age_at_diagnosis < 10 ~ "[5,10[",
+    Age_at_diagnosis >= 10 & Age_at_diagnosis < 15 ~ "[10,15[",
+    Age_at_diagnosis >= 15 & Age_at_diagnosis < 20 ~ "[15,20[",
+    Age_at_diagnosis >= 20 & Age_at_diagnosis < 25 ~ "[20,25[",
+    Age_at_diagnosis >= 25 & Age_at_diagnosis < 30 ~ "[25,30[",
+    Age_at_diagnosis >= 30 & Age_at_diagnosis < 35 ~ "[30,35[",
+    Age_at_diagnosis >= 35 & Age_at_diagnosis < 40 ~ "[35,40[",
+    Age_at_diagnosis >= 40 & Age_at_diagnosis < 45 ~ "[40,45[",
+    Age_at_diagnosis >= 45 & Age_at_diagnosis < 50 ~ "[45,50[",
+    Age_at_diagnosis >= 50 & Age_at_diagnosis < 55 ~ "[50,55[",
+    Age_at_diagnosis >= 55 & Age_at_diagnosis < 60 ~ "[55,60[",
+    Age_at_diagnosis >= 60 & Age_at_diagnosis < 65 ~ "[60,65[",
+    Age_at_diagnosis >= 65 & Age_at_diagnosis < 70 ~ "[65,70[",
+    Age_at_diagnosis >= 70 & Age_at_diagnosis < 75 ~ "[70,75[",
+    Age_at_diagnosis >= 75 & Age_at_diagnosis < 80 ~ "[75,80["
+  )) %>%
+  mutate(age_cat = factor(age_cat))
+```
+
+Now we use the Scheirer-Ray-Hare test to see whether gender and age categroy at diagnosis have an effect on the abundance of Bacteroidia in patients with Crohn's disease.
+
+The Scheirer-Ray-Hare test is used in statistical analysis as a non-parametric alternative to the two-way ANOVA. It is typically employed when the assumptions of normality and homogeneity of variance, which are required for ANOVA, are violated. This test is useful in situations where the data is non-normally distributed or ordinal. It allows you to test for the effects of two categorical independent variables (factors) on a continuous dependent variable, as well as their interaction.
+
+```{r}
+library(rcompanion)
+```
+
+```{r}
+SRH_bacteroidia <- scheirerRayHare(Abundance ~ Gender * age_cat, data = bacteroidia_age_categories)
+SRH_bacteroidia
+```
+
+Based on these results, we can conclude that gender has a significant effect (p-value = 0.01054) on the distribution of Bacteroidia in Crohn's disease patients, but the age category does not (p-value = 0.31836). The interaction between gender and age category has a little less significant effect on the abundance of Bacteroidia in CD patients (p-value = 0.1120) than just gender.
+
+
+**Conclusion hypothesis 2**
+
+In this second hypothesis, we tried to find out whether gender and the age at diagnosis have an effect on the abundance of Bacteroidia in Crohn's disease patients. Bacteroidia is the bacterial class with the widest range of abundance among the 10 most abundant bacteria in Crohn's disease. Based on the statistical tests we performed, we were able to conclude that gender has a significant effect on the abundance of Bacteroidia in patients with Crohn's disease. The age category at diagnosis, however, does not have a significant effect on this abundance. The interaction between the variables 'gender' and 'age category at diagnosis' has a significant effect, but this is mainly due to gender and not the age at diagnosis.
+
+
+
